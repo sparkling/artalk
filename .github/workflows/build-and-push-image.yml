@@ -1,0 +1,95 @@
+# Build & publish the fork's Artalk container image to Docker Hub on
+# every push to main, then update Railway to deploy that exact image
+# by short SHA so we never run :latest in production.
+#
+# Why no :latest tag: a floating tag makes "what's deployed?" ambiguous
+# and breaks bisecting. Consumers (Railway, anyone else) pin to the
+# immutable :<short-sha> tag. The :main tag still gets published for
+# casual `docker pull`, but the actual deploy uses SHA.
+#
+# Tags published per push to main:
+#   sparklingideas/artalk:main           moving pointer, convenience only
+#   sparklingideas/artalk:<short-sha>    immutable, what Railway deploys
+#
+# Required GH Actions secrets (already set on this repo):
+#   DOCKERHUB_USERNAME=sparklingideas
+#   DOCKERHUB_TOKEN=<Docker Hub PAT, read/write/delete on artalk>
+#   RAILWAY_TOKEN=<Railway project token, scoped to opda-artalk>
+#
+# Guarded with `if: github.repository == 'sparkling/Artalk'` so this
+# workflow only runs on the fork — keeps the patch upstream-friendly.
+
+name: Build → Docker Hub → Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: docker.io/sparklingideas/artalk
+  RAILWAY_SERVICE_ID: 20a31870-3e64-4b8b-9e8b-334097617cb2
+  RAILWAY_ENVIRONMENT_ID: 37befc8b-606e-4b61-b0b3-8c4b225b3c7b
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    if: github.repository == 'sparkling/Artalk'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Pin Railway to immutable :<short-sha> tag
+        run: |
+          SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          IMAGE_REF="${IMAGE}:${SHORT_SHA}"
+          echo "Pinning Railway service to $IMAGE_REF"
+
+          RESP=$(curl -sS --fail \
+            -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Project-Access-Token: ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "query": "mutation(\$svc: String!, \$env: String!, \$src: ServiceSourceInput) { serviceInstanceUpdate(serviceId: \$svc, environmentId: \$env, input: { source: \$src }) }",
+            "variables": {
+              "svc": "${RAILWAY_SERVICE_ID}",
+              "env": "${RAILWAY_ENVIRONMENT_ID}",
+              "src": { "image": "${IMAGE_REF}" }
+            }
+          }
+          EOF
+          )
+          echo "Railway response: $RESP"
+          # serviceInstanceUpdate returns true on success and triggers a
+          # redeploy automatically because the source changed. No separate
+          # redeploy mutation needed.
+          if ! echo "$RESP" | grep -q '"serviceInstanceUpdate":true'; then
+            echo "::error::Railway service-update did not return true"
+            exit 1
+          fi
