@@ -85,11 +85,32 @@ jobs:
           }
           EOF
           )
-          echo "Railway response: $RESP"
-          # serviceInstanceUpdate returns true on success and triggers a
-          # redeploy automatically because the source changed. No separate
-          # redeploy mutation needed.
+          echo "Railway source-update response: $RESP"
           if ! echo "$RESP" | grep -q '"serviceInstanceUpdate":true'; then
             echo "::error::Railway service-update did not return true"
+            exit 1
+          fi
+
+          # Explicit redeploy. serviceInstanceUpdate alone often doesn't
+          # trigger a pull when only the image *tag* changes (Railway sees
+          # the same registry digest cached and skips). serviceInstanceRedeploy
+          # forces a fresh pull from Docker Hub for the new :<short-sha> tag.
+          REDEPLOY=$(curl -sS --fail \
+            -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Project-Access-Token: ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "query": "mutation(\$svc: String!, \$env: String!) { serviceInstanceRedeploy(serviceId: \$svc, environmentId: \$env) }",
+            "variables": {
+              "svc": "${RAILWAY_SERVICE_ID}",
+              "env": "${RAILWAY_ENVIRONMENT_ID}"
+            }
+          }
+          EOF
+          )
+          echo "Railway redeploy response: $REDEPLOY"
+          if ! echo "$REDEPLOY" | grep -q '"serviceInstanceRedeploy":true'; then
+            echo "::error::Railway redeploy did not return true"
             exit 1
           fi
