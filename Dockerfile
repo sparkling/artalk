@@ -59,7 +59,11 @@ COPY scripts/docker-artalk-runner.sh /usr/bin/artalk
 RUN chmod +x /usr/bin/artalk \
     && ln -s /usr/bin/artalk /usr/bin/artalk-go
 
-VOLUME ["/data"]
+# Container-managed VOLUME is unsupported on some hosting platforms
+# (e.g. Railway, which uses externally-mounted volumes). The line is
+# advisory anyway — the data dir works whether VOLUME is declared or
+# not. Keep it commented so platforms that require it can re-enable.
+# VOLUME ["/data"]
 
 COPY docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
