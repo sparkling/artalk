@@ -19,7 +19,7 @@ name: Deploy fork to Railway (opda-artalk)
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
