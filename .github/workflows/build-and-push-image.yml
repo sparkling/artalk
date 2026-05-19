@@ -28,7 +28,7 @@ on:
 
 env:
   IMAGE: docker.io/sparklingideas/artalk
-  RAILWAY_SERVICE_ID: 20a31870-3e64-4b8b-9e8b-334097617cb2
+  RAILWAY_SERVICE_ID: dc959546-192c-4fc6-b887-b4f7bc3b0dc8
   RAILWAY_ENVIRONMENT_ID: 37befc8b-606e-4b61-b0b3-8c4b225b3c7b
 
 jobs:
