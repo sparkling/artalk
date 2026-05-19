@@ -1,20 +1,22 @@
-# Build the fork's Artalk container image and publish it to GitHub
-# Container Registry. Railway's `artalk` service is configured to deploy
-# from this image, so a successful push here triggers a Railway redeploy.
+# Build the fork's Artalk container image and publish it to Docker Hub
+# at sparklingideas/artalk. Railway's `artalk` service deploys from
+# this image, so a successful push here makes the new build live on
+# the next Railway pull / restart.
 #
-# Tags published:
-#   ghcr.io/sparkling/artalk:latest       (always)
-#   ghcr.io/sparkling/artalk:main         (always)
-#   ghcr.io/sparkling/artalk:<short-sha>  (immutable, pin in Railway if rollbacks are needed)
+# Tags published per push to main:
+#   sparklingideas/artalk:latest
+#   sparklingideas/artalk:main
+#   sparklingideas/artalk:<short-sha>   (immutable; pin for rollback)
 #
-# Auth: GHCR uses the workflow's built-in GITHUB_TOKEN. No extra secrets
-# required. The repo's package settings make the image publicly pullable
-# (default for public repos).
+# Required GH Actions secrets:
+#   DOCKERHUB_USERNAME  Docker Hub user that owns sparklingideas/artalk
+#   DOCKERHUB_TOKEN     Docker Hub PAT with read/write/delete scope on
+#                       the artalk repo
 #
 # Guarded with `if: github.repository == 'sparkling/Artalk'` so this
-# workflow only runs in the fork — keeps the patch upstream-friendly.
+# workflow only runs on the fork — keeps the patch upstream-friendly.
 
-name: Build & push image to GHCR
+name: Build & push image to Docker Hub
 
 on:
   push:
@@ -25,9 +27,6 @@ jobs:
   build-push:
     runs-on: ubuntu-latest
     if: github.repository == 'sparkling/Artalk'
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -35,14 +34,14 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/sparkling/artalk
+          images: docker.io/sparklingideas/artalk
           tags: |
             type=ref,event=branch
             type=sha,prefix=,format=short
