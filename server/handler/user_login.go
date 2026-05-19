@@ -35,6 +35,15 @@ type ResponseUserLogin struct {
 // @Router       /user/access_token  [post]
 func UserLogin(app *core.App, router fiber.Router) {
 	router.Post("/user/access_token", common.LimiterGuard(app, func(c *fiber.Ctx) error {
+		// Gate the password-login endpoint on the same flag /auth/email/login
+		// already respects. Without this check, disabling auth.email.enabled
+		// (to remove the comment-widget login UI) doesn't actually prevent
+		// password-based admin login via the API. With it, both surfaces are
+		// controlled by one config switch.
+		if !app.Conf().Auth.Email.Enabled {
+			return common.RespError(c, 404, "Email/password login is disabled")
+		}
+
 		var p ParamsUserLogin
 		if isOK, resp := common.ParamsDecode(c, &p); !isOK {
 			return resp
