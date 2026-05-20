@@ -70,6 +70,16 @@ jobs:
           IMAGE_REF="${IMAGE}:${SHORT_SHA}"
           echo "Deploying $IMAGE_REF to Railway"
 
+          DEPLOYMENTS_QUERY='{"query":"query($s:String!,$e:String!){deployments(first:1,input:{serviceId:$s,environmentId:$e}){edges{node{id status}}}}","variables":{"s":"'"${RAILWAY_SERVICE_ID}"'","e":"'"${RAILWAY_ENVIRONMENT_ID}"'"}}'
+          latest() {
+            curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+              -H "Project-Access-Token: ${{ secrets.RAILWAY_TOKEN }}" \
+              -H "Content-Type: application/json" -d "$DEPLOYMENTS_QUERY" \
+              | python3 -c "import sys,json;d=json.load(sys.stdin);e=(d.get('data') or {}).get('deployments',{}).get('edges',[]);n=e[0]['node'] if e else {};print(n.get('id',''),n.get('status',''))"
+          }
+          BEFORE="$(latest | cut -d' ' -f1)"
+          echo "Deployment before: ${BEFORE:-none}"
+
           # Step 1 — PIN the service source to the immutable :<short-sha>.
           # serviceInstanceUpdate only updates config; it does NOT roll out.
 
@@ -99,11 +109,11 @@ jobs:
           # deploy it" — the same mutation the official `railway redeploy` uses.
           # (The old serviceInstanceRedeploy is broken: "Problem processing
           # request".) This is a SINGLE deploy, so nothing races the /data volume.
-          DEPLOY=$(curl -sS --fail \
+          DEPLOY=$(curl -sS --max-time 60 \
             -X POST https://backboard.railway.com/graphql/v2 \
             -H "Project-Access-Token: ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d @- <<EOF
+            -d @- <<EOF || true
           {
             "query": "mutation(\$svc: String!, \$env: String!) { serviceInstanceDeploy(serviceId: \$svc, environmentId: \$env, latestCommit: true) }",
             "variables": {
@@ -114,7 +124,22 @@ jobs:
           EOF
           )
           echo "Railway deploy response: $DEPLOY"
-          if ! echo "$DEPLOY" | grep -q '"serviceInstanceDeploy":true'; then
-            echo "::error::Railway serviceInstanceDeploy did not return true"
-            exit 1
-          fi
+
+          # Step 3 — VERIFY the outcome (source of truth). Don't trust mutation
+          # return values: serviceInstanceUpdate can auto-deploy (making the
+          # call above return an in-flight error), and Railway can be transiently
+          # degraded. Wait for a NEW deployment to reach SUCCESS.
+          for i in $(seq 1 45); do
+            read -r ID ST <<< "$(latest)"
+            echo "  poll $i: ${ID:0:8} ${ST}"
+            if [ -n "$ID" ] && [ "$ID" != "$BEFORE" ] && [ "$ST" = "SUCCESS" ]; then
+              echo "Rolled out $IMAGE_REF as deployment $ID"
+              exit 0
+            fi
+            case "$ST" in
+              FAILED|CRASHED) echo "::error::deployment $ID ended $ST"; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::timed out waiting for a SUCCESS deployment of $IMAGE_REF"
+          exit 1
