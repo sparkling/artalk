@@ -64,11 +64,14 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-      - name: Pin Railway to immutable :<short-sha> tag
+      - name: Deploy the immutable :<short-sha> image to Railway
         run: |
           SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-7)"
           IMAGE_REF="${IMAGE}:${SHORT_SHA}"
-          echo "Pinning Railway service to $IMAGE_REF"
+          echo "Deploying $IMAGE_REF to Railway"
+
+          # Step 1 — PIN the service source to the immutable :<short-sha>.
+          # serviceInstanceUpdate only updates config; it does NOT roll out.
 
           RESP=$(curl -sS --fail \
             -X POST https://backboard.railway.com/graphql/v2 \
@@ -91,17 +94,18 @@ jobs:
             exit 1
           fi
 
-          # Explicit redeploy. serviceInstanceUpdate alone often doesn't
-          # trigger a pull when only the image *tag* changes (Railway sees
-          # the same registry digest cached and skips). serviceInstanceRedeploy
-          # forces a fresh pull from Docker Hub for the new :<short-sha> tag.
-          REDEPLOY=$(curl -sS --fail \
+          # Step 2 — ROLL OUT the pinned image. serviceInstanceDeploy with
+          # latestCommit:true = "pull the configured source's latest image and
+          # deploy it" — the same mutation the official `railway redeploy` uses.
+          # (The old serviceInstanceRedeploy is broken: "Problem processing
+          # request".) This is a SINGLE deploy, so nothing races the /data volume.
+          DEPLOY=$(curl -sS --fail \
             -X POST https://backboard.railway.com/graphql/v2 \
             -H "Project-Access-Token: ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d @- <<EOF
           {
-            "query": "mutation(\$svc: String!, \$env: String!) { serviceInstanceRedeploy(serviceId: \$svc, environmentId: \$env) }",
+            "query": "mutation(\$svc: String!, \$env: String!) { serviceInstanceDeploy(serviceId: \$svc, environmentId: \$env, latestCommit: true) }",
             "variables": {
               "svc": "${RAILWAY_SERVICE_ID}",
               "env": "${RAILWAY_ENVIRONMENT_ID}"
@@ -109,8 +113,8 @@ jobs:
           }
           EOF
           )
-          echo "Railway redeploy response: $REDEPLOY"
-          if ! echo "$REDEPLOY" | grep -q '"serviceInstanceRedeploy":true'; then
-            echo "::error::Railway redeploy did not return true"
+          echo "Railway deploy response: $DEPLOY"
+          if ! echo "$DEPLOY" | grep -q '"serviceInstanceDeploy":true'; then
+            echo "::error::Railway serviceInstanceDeploy did not return true"
             exit 1
           fi
