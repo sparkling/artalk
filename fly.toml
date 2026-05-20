@@ -1,0 +1,23 @@
+# Fly.io deploy for the OPDA Artalk comments backend.
+# Fly builds the fork's Dockerfile and runs a single always-on Machine
+# with a Fly Volume at /data for the SQLite DB.
+app = "opda-artalk"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ATK_PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # SQLite is single-writer: exactly one always-on Machine, no scale-to-zero.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "artalk_data"
+  destination = "/data"
