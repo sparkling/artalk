@@ -9,6 +9,9 @@ primary_region = "lhr"
 
 [env]
   ATK_PORT = "8080"
+  # Comments are gated to allowlisted, signed-in users (Auth0), so the
+  # anti-spam captcha is redundant and gets in the way of the SSO flow.
+  ATK_CAPTCHA_ENABLED = "false"
 
 [http_service]
   internal_port = 8080
@@ -17,6 +20,13 @@ primary_region = "lhr"
   auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/v2/version"
 
 [[mounts]]
   source = "artalk_data"
