@@ -1,0 +1,63 @@
+# Deploy the Artalk fork to AWS (ECR + ECS Fargate) on every push to main —
+# ADR-0040 §4 in sparkling/opda: the image is built where its source lives;
+# this workflow authenticates via GitHub OIDC to the opda-artalk-deploy role
+# (ECR push + service bump and nothing else; no static AWS keys) and bumps
+# the single-writer Fargate service.
+#
+# Runs alongside the Fly.io workflow until the ADR-0038 cutover, after which
+# deploy.yml (Fly) is removed.
+#
+# Guarded to the fork so the patch stays upstream-friendly.
+name: Deploy to AWS (ECR + Fargate)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The ECS service enforces single-writer per deployment; this prevents two
+# image builds racing each other to :latest.
+concurrency: deploy-opda-artalk-aws
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ECR: 355653384628.dkr.ecr.eu-west-2.amazonaws.com/opda-artalk
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.repository == 'sparkling/Artalk'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Assume deploy role (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::355653384628:role/opda-artalk-deploy
+          aws-region: eu-west-2
+
+      - name: Log in to ECR
+        run: |
+          aws ecr get-login-password --region eu-west-2 \
+            | docker login --username AWS --password-stdin 355653384628.dkr.ecr.eu-west-2.amazonaws.com
+
+      - name: Build image (base + Litestream layer)
+        run: |
+          docker build -t artalk-base .
+          docker build -f Dockerfile.aws --build-arg BASE_IMAGE=artalk-base \
+            -t "$ECR:latest" -t "$ECR:${{ github.sha }}" .
+
+      - name: Push
+        run: |
+          docker push "$ECR:latest"
+          docker push "$ECR:${{ github.sha }}"
+
+      # Stop-old-then-start-new (minimumHealthyPercent=0 in the service) —
+      # never two SQLite writers. A no-op while desired count is 0.
+      - name: Roll the service
+        run: |
+          aws ecs update-service --cluster opda --service opda-artalk \
+            --force-new-deployment --query 'service.deployments' --output table
